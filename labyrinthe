@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+import time
+import RPi.GPIO as GPIO
+import Adafruit_PCA9685
+import ultra
+import servo
+import move
+import csv
+
+# Initialize the Adafruit PCA9685 PWM driver
+pwm = Adafruit_PCA9685.PCA9685()
+pwm.set_pwm_freq(50)  # Set the frequency to 50 Hz
+
+def setup():
+    move.setup()
+    GPIO.setwarnings(False)
+    GPIO.setmode(GPIO.BCM)
+    servo.turnMiddle()
+    # Définir la position initiale tout à gauche
+    pwm.set_pwm(1, 0, 400)
+    time.sleep(1)  # Laisser le temps au servo de se positionner
+
+def radarScan():
+    result = []  # Liste pour stocker les données de distance et d'angle
+    # Balayer du tout à gauche (400) au tout à droite (200)
+    for pos in range(400, 199, -1):  # de 400 à 200 inclus
+        pwm.set_pwm(1, 0, pos)
+        time.sleep(0.002)  # Attente très courte pour un mouvement fluide et très rapide
+        dist = ultra.checkdist()  # Get distance from ultrasonic sensor
+        if dist <= 0.3:  # Enregistrer seulement si la distance est inférieure à 20 cm
+            theta = 180 - ((pos - 200) / ((400 - 200) / 180))  # Calculate angle
+            result.append([dist, theta])
+
+    # Retourner au point de départ tout à gauche pour le prochain balayage
+    pwm.set_pwm(1, 0, 300)
+    time.sleep(1)  # Pause to stabilize servo position
+    return result
+
+def save_to_csv(obstacles, filename='obstacles.csv'):
+    with open(filename, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Distance', 'Angle'])
+        writer.writerows(obstacles)
+
+# Main function
+def main():
+    setup()
+    
+    try:
+        while True:
+            move.motorStop()  # Arrêter le mouvement avant le scan
+            time.sleep(0.5)  # Attendre un court instant pour que le robot s'arrête complètement
+            
+            obstacles = radarScan()
+            print("Detected obstacles:", obstacles)
+            
+            # Enregistrer les obstacles dans un fichier CSV
+            save_to_csv(obstacles)
+            
+            # Collecte des données sur les zones d'obstacles détectés
+            obstacles_zones = [False] * 7
+            for obstacle in obstacles:
+                if 0 <= obstacle[1] < 25.7:
+                    obstacles_zones[0] = True
+                elif 25.7 <= obstacle[1] < 51.4:
+                    obstacles_zones[1] = True
+                elif 51.4 <= obstacle[1] < 77.1:
+                    obstacles_zones[2] = True
+                elif 77.1 <= obstacle[1] < 102.8:
+                    obstacles_zones[3] = True
+                elif 102.8 <= obstacle[1] < 128.5:
+                    obstacles_zones[4] = True
+                elif 128.5 <= obstacle[1] < 154.2:
+                    obstacles_zones[5] = True
+                elif 154.2 <= obstacle[1] <= 180:
+                    obstacles_zones[6] = True
+            
+            print("Obstacles zones:", obstacles_zones)
+
+            # Décision du mouvement en fonction des zones détectées
+            if obstacles_zones[3]:  # Zone centrale bloquée
+                if obstacles_zones[0] or obstacles_zones[1] or obstacles_zones[2]:  # Obstacles à gauche
+                    if obstacles_zones[4] or obstacles_zones[5] or obstacles_zones[6]:  # Obstacles à droite
+                        print("Obstacle dans toutes les zones - Reculer")
+                        servo.turnMiddle()
+                        move.move(80, 'backward', 'no', 0.3)
+                    else:
+                        print("Obstacle à gauche et devant - Tourner à droite")
+                        servo.turnRight(0.8)
+                        move.move(80, 'forward', 'no', 0.7)
+                elif obstacles_zones[4] or obstacles_zones[5] or obstacles_zones[6]:  # Obstacles à droite
+                    print("Obstacle à droite et devant - Tourner à gauche")
+                    servo.turnLeft(0.8)
+                    move.move(80, 'forward', 'no', 0.7)
+                else:
+                    print("Obstacle devant - Reculer")
+                    servo.turnMiddle()
+                    move.move(80, 'backward', 'no', 0.3)
+            else:  # Zone centrale dégagée
+                if obstacles_zones[0] or obstacles_zones[1] or obstacles_zones[2]:  # Obstacles à gauche
+                    if obstacles_zones[4] or obstacles_zones[5] or obstacles_zones[6]:  # Obstacles à droite
+                        print("Obstacles à gauche et à droite - Aller tout droit")
+                        servo.turnMiddle()
+                        move.move(80, 'forward', 'no', 0.7)
+                    else:
+                        print("Obstacle à gauche - Tourner à droite légèrement")
+                        servo.turnRight(0.4)
+                        move.move(80, 'forward', 'no', 0.7)
+                elif obstacles_zones[4] or obstacles_zones[5] or obstacles_zones[6]:  # Obstacles à droite
+                    print("Obstacle à droite - Tourner à gauche légèrement")
+                    servo.turnLeft(0.4)
+                    move.move(80, 'forward', 'no', 0.7)
+                else:
+                    print("Pas d'obstacle détecté - Aller tout droit")
+                    servo.turnMiddle()
+                    move.move(80, 'forward', 'no', 0.7)
+
+            time.sleep(0.5)  # Attente d'une seconde avant de recommencer la boucle
+    except KeyboardInterrupt:
+        # Arrêt du programme si Ctrl+C est pressé
+        pass
+    finally:
+        GPIO.cleanup()  # Nettoyage des GPIO à la fin du programme
+
+# Run the program
+if __name__ == "__main__":
+    main()
