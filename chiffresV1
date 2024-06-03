@@ -1,0 +1,109 @@
+import numpy as np
+import cv2
+
+def detect_digit(warped):
+    # Paramètres pour détecter les segments
+    segment_positions = {
+        'top': (0.40, 0.18, 0.22, 0.05),  # Centre x, Top y, Width, Height
+        'top_left': (0.25, 0.26, 0.10, 0.17),  # Slightly left x, lower y, Width, Height
+        'top_right': (0.65, 0.26, 0.10, 0.17),  # Slightly right x, same lower y, Width, Height
+        'middle': (0.40, 0.47, 0.22, 0.05),  # Centre x, Middle y, Width, Height
+        'bottom_left': (0.25, 0.54, 0.10, 0.17),  # Same left x, lower y, Width, Height
+        'bottom_right': (0.65, 0.54, 0.10, 0.17),  # Same right x, same lower y, Width, Height
+        'bottom': (0.40, 0.75, 0.22, 0.05)  # Centre x, Bottom y, Width, Height
+    }
+
+    # Convertir en niveaux de gris et appliquer un seuil
+    gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+    thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+    display_image = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)  # Convertir l'image seuillée en couleur pour dessiner en couleur
+
+    # Détection des états des segments et dessiner les grilles
+    on_segments = []
+    for name, position in segment_positions.items():
+        x, y, w, h = position
+        seg_x, seg_y, seg_w, seg_h = int(x * warped.shape[1]), int(y * warped.shape[0]), int(w * warped.shape[1]), int(h * warped.shape[0])
+        cv2.rectangle(display_image, (seg_x, seg_y), (seg_x + seg_w, seg_y + seg_h), (0, 255, 0), 2)  # Dessiner les grilles en vert
+        segment_roi = thresh[seg_y:seg_y + seg_h, seg_x:seg_x + seg_w]
+        total_pixels = cv2.countNonZero(segment_roi)
+        area = seg_w * seg_h
+        if total_pixels / float(area) > 0.5:
+            on_segments.append(1)
+        else:
+            on_segments.append(0)
+
+    digit_segments = {
+        (1, 1, 1, 0, 1, 1, 1): 0,
+        (0, 0, 1, 0, 0, 1, 0): 1,
+        (1, 0, 1, 1, 1, 0, 1): 2,
+        (1, 0, 1, 1, 0, 1, 1): 3,
+        (0, 1, 1, 1, 0, 1, 0): 4,
+        (1, 1, 0, 1, 0, 1, 1): 5,
+        (1, 1, 0, 1, 1, 1, 1): 6,
+        (1, 0, 1, 0, 0, 1, 0): 7,
+        (1, 1, 1, 1, 1, 1, 1): 8,
+        (1, 1, 1, 1, 0, 1, 1): 9
+    }
+
+    digit = digit_segments.get(tuple(on_segments), '?')  # Retourne '?' si le chiffre n'est pas trouvé
+    print(f"Detected digit: {digit}")
+    cv2.imshow('Segment Analysis', display_image)
+    cv2.waitKey(0)  # Attendre une touche pour fermer
+    cv2.destroyAllWindows()
+    return digit
+
+def capture_and_detect_aruco():
+    camera = cv2.VideoCapture(0)
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
+    parameters = cv2.aruco.DetectorParameters()
+
+    while True:
+        ret, frame = camera.read()
+        if ret:
+            frame_for_detection = frame.copy()
+            markerCorners, markerIds, _ = cv2.aruco.detectMarkers(frame, dictionary, parameters=parameters)
+            if markerIds is not None:
+                cv2.aruco.drawDetectedMarkers(frame, markerCorners, markerIds)
+
+                # Créer une image de transformation de perspective si les conditions sont remplies
+                if len(markerIds) == 4 and any(id[0] == 9 for id in markerIds):
+                    for corner in markerCorners:
+                        cv2.fillConvexPoly(frame_for_detection, np.int32(corner), (255, 255, 255))
+                    warped_image, _ = perspective_transform(frame_for_detection, markerCorners)
+                    if warped_image is not None:
+                        digit = detect_digit(warped_image)
+                        cv2.putText(warped_image, f"Chiffre: {digit}", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                        cv2.imshow('Warped Image', warped_image)
+
+            cv2.imshow('Frame', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    camera.release()
+    cv2.destroyAllWindows()
+
+def perspective_transform(image, markerCorners):
+    if len(markerCorners) != 4:
+        print("Erreur : Nombre incorrect de coins détectés.")
+        return None, None
+    
+    corners = np.array([corner[0] for corner in markerCorners], dtype='float32').reshape(-1, 2)
+    top_left, top_right, bottom_right, bottom_left = order_points(corners)
+    width, height = 500, 500
+    dst = np.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]], dtype='float32')
+    matrix = cv2.getPerspectiveTransform(np.array([top_left, top_right, bottom_right, bottom_left]), dst)
+    warped = cv2.warpPerspective(image, matrix, (width, height))
+    return warped, matrix
+
+def order_points(pts):
+    rect = np.zeros((4, 2), dtype='float32')
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+    return rect
+
+if __name__ == "__main__":
+    capture_and_detect_aruco()
