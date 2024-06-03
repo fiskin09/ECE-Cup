@@ -1,0 +1,93 @@
+import numpy as np
+import cv2
+
+def detect_major_color(image):
+    # Convertir l'image en espace de couleur HSV
+    hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+    # Calculer l'histogramme des valeurs HSV
+    # Hue varie de 0 à 180 dans OpenCV
+    hue_hist = cv2.calcHist([hsv_image], [0], None, [180], [0, 180])
+    sat_hist = cv2.calcHist([hsv_image], [1], None, [256], [0, 256])
+    val_hist = cv2.calcHist([hsv_image], [2], None, [256], [0, 256])
+
+    # Trouver la teinte la plus dominante
+    dominant_hue = np.argmax(hue_hist)
+    
+    # Définir les plages de couleurs dans l'espace HSV
+    color_ranges = {
+        "Jaune": ([25, 150, 150], [35, 255, 255]),
+        "Rouge": ([0, 150, 150], [10, 255, 255]),
+        "Rouge2": ([160, 150, 150], [180, 255, 255]),
+        "Vert": ([45, 150, 150], [150, 255, 255])
+    }
+
+    # Trouver la couleur correspondante à la teinte dominante
+    for color_name, (lower_bound, upper_bound) in color_ranges.items():
+        if dominant_hue >= lower_bound[0] and dominant_hue <= upper_bound[0]:
+            # Une fois la couleur dominante détectée, on peut arrêter la boucle
+            dominant_color_name = color_name
+            break
+    else:
+        dominant_color_name = "Non déterminé"
+
+    # Ajouter le texte de la couleur dominante sur l'image
+    cv2.putText(image, f"Couleur dominante: {dominant_color_name}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    print(f"Couleur dominante: {dominant_color_name}")
+
+    return dominant_color_name, image
+
+def capture_and_detect_aruco():
+    camera = cv2.VideoCapture(0)
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
+    parameters = cv2.aruco.DetectorParameters()
+
+    while True:
+        ret, frame = camera.read()
+        if ret:
+            frame_for_detection = frame.copy()
+            markerCorners, markerIds, _ = cv2.aruco.detectMarkers(frame, dictionary, parameters=parameters)
+            if markerIds is not None:
+                cv2.aruco.drawDetectedMarkers(frame, markerCorners, markerIds)
+
+                # Créer une image de transformation de perspective si les conditions sont remplies
+                if len(markerIds) == 4 and np.all(markerIds == 8):
+                    for corner in markerCorners:
+                        cv2.fillConvexPoly(frame_for_detection, np.int32(corner), (255, 255, 255))
+                    warped_image, _ = perspective_transform(frame_for_detection, markerCorners)
+                    if warped_image is not None:
+                        detect_major_color(warped_image)
+                        cv2.imshow('Warped Image', warped_image)
+
+            cv2.imshow('Frame', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    camera.release()
+    cv2.destroyAllWindows()
+
+def perspective_transform(image, markerCorners):
+    if len(markerCorners) != 4:
+        print("Erreur : Nombre incorrect de coins détectés.")
+        return None, None
+    
+    corners = np.array([corner[0] for corner in markerCorners], dtype='float32').reshape(-1, 2)
+    top_left, top_right, bottom_right, bottom_left = order_points(corners)
+    width, height = 500, 500
+    dst = np.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]], dtype='float32')
+    matrix = cv2.getPerspectiveTransform(np.array([top_left, top_right, bottom_right, bottom_left]), dst)
+    warped = cv2.warpPerspective(image, matrix, (width, height))
+    return warped, matrix
+
+def order_points(pts):
+    rect = np.zeros((4, 2), dtype='float32')
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+    return rect
+
+if __name__ == "__main__":
+    capture_and_detect_aruco()
