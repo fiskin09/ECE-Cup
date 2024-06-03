@@ -1,0 +1,101 @@
+import numpy as np
+import cv2
+
+# Fonction pour détecter la direction de la flèche dans l'image transformée
+def detect_arrow_direction(image):
+    img_blur = cv2.GaussianBlur(image, (11, 11), 0)
+    img_gray = cv2.cvtColor(img_blur, cv2.COLOR_BGR2GRAY)
+    vertices = cv2.goodFeaturesToTrack(img_gray, 7, 0.01, 10)
+    if vertices is not None:
+        vertices = np.int0(vertices)
+        xmin, ymin = np.inf, np.inf
+        xmax, ymax = -np.inf, -np.inf
+        for vertex in vertices:
+            x, y = vertex.ravel()
+            xmin, ymin = min(x, xmin), min(y, ymin)
+            xmax, ymax = max(x, xmax), max(y, ymax)
+            # Affiche un point sur chaque sommet de la flèche détectée
+            cv2.circle(image, (x, y), 5, (255, 0, 0), -1)
+        xmid = image.shape[1] / 2
+        left_count = right_count = 0
+        for vertex in vertices:
+            x, y = vertex.ravel()
+            if x < xmid:
+                left_count += 1
+                # Marquer les points à gauche en vert
+                cv2.circle(image, (x, y), 5, (0, 255, 0), -1)
+            else:
+                right_count += 1
+                # Marquer les points à droite en bleu
+                cv2.circle(image, (x, y), 5, (0, 0, 255), -1)
+        direction = 'Droite' if right_count > left_count else 'Gauche'
+        # Affiche la direction de la flèche détectée dans le terminal
+        print(f"Direction de la flèche : {direction}")
+        cv2.putText(image, f'Direction: {direction}', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(image, f'Gauche : {left_count}', (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(image, f'Droite : {right_count}', (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+        # Dessiner une ligne verticale au point médian
+        cv2.line(image, (int(xmid), 0), (int(xmid), image.shape[0]), (255, 255, 0), 2)
+    else:
+        print("Aucun sommet trouvé pour la direction de la flèche.")
+
+# Fonction pour capturer des images depuis la webcam jusqu'à ce que 'q' soit pressé
+def capture_and_detect_aruco():
+    camera = cv2.VideoCapture(0)
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
+    parameters = cv2.aruco.DetectorParameters()
+
+    while True:
+        ret, frame = camera.read()
+        if ret:
+            frame_for_detection = frame.copy()  # Créez une copie pour les opérations de détection
+            markerCorners, markerIds, _ = cv2.aruco.detectMarkers(frame, dictionary, parameters=parameters)
+            if markerIds is not None:
+                # Affiche les marqueurs sur l'image originale pour la visualisation mais pas sur la copie utilisée pour la détection
+                cv2.aruco.drawDetectedMarkers(frame, markerCorners, markerIds)
+                if len(markerCorners) == 4:
+                    # Remplir les marqueurs avec du blanc sur la copie pour la détection
+                    for corner in markerCorners:
+                        cv2.fillConvexPoly(frame_for_detection, np.int32(corner), (255, 255, 255))
+                    warped_image, _ = perspective_transform(frame_for_detection, markerCorners)
+                    if warped_image is not None:
+                        detect_arrow_direction(warped_image)
+                        cv2.imshow('Warped Image', warped_image)
+            cv2.imshow('Frame', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    camera.release()
+    cv2.destroyAllWindows()
+
+
+def perspective_transform(image, markerCorners):
+    if len(markerCorners) != 4:
+        print("Erreur : Nombre incorrect de coins détectés.")
+        return None, None
+    
+    corners = np.array([corner[0] for corner in markerCorners], dtype='float32').reshape(-1, 2)
+    top_left, top_right, bottom_right, bottom_left = order_points(corners)
+    width, height = 500, 500
+    dst = np.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]], dtype='float32')
+    matrix = cv2.getPerspectiveTransform(np.array([top_left, top_right, bottom_right, bottom_left]), dst)
+    warped = cv2.warpPerspective(image, matrix, (width, height))
+    return warped, matrix
+
+def order_points(pts):
+    rect = np.zeros((4, 2), dtype='float32')
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+    return rect
+
+if __name__ == "__main__":
+    capture_and_detect_aruco()
+
+
+
+
+
