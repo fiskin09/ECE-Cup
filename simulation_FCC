@@ -1,1 +1,207 @@
+import numpy as np
+import cv2
+
+def detect_digit(warped):
+    # Paramètres pour détecter les segments
+    segment_positions = {
+        'top': (0.40, 0.18, 0.22, 0.05),  # Centre x, Top y, Width, Height
+        'top_left': (0.25, 0.26, 0.10, 0.17),  # Slightly left x, lower y, Width, Height
+        'top_right': (0.65, 0.26, 0.10, 0.17),  # Slightly right x, same lower y, Width, Height
+        'middle': (0.40, 0.47, 0.22, 0.05),  # Centre x, Middle y, Width, Height
+        'bottom_left': (0.25, 0.54, 0.10, 0.17),  # Same left x, lower y, Width, Height
+        'bottom_right': (0.65, 0.54, 0.10, 0.17),  # Same right x, same lower y, Width, Height
+        'bottom': (0.40, 0.75, 0.22, 0.05)  # Centre x, Bottom y, Width, Height
+    }
+
+    # Convertir en niveaux de gris et appliquer un seuil
+    gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
+    thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+    display_image = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)  # Pour dessiner en couleur
+
+    # Détection des états des segments
+    on_segments = []
+    for name, position in segment_positions.items():
+        x, y, w, h = position
+        seg_x, seg_y, seg_w, seg_h = int(x * warped.shape[1]), int(y * warped.shape[0]), int(w * warped.shape[1]), int(h * warped.shape[0])
+        cv2.rectangle(display_image, (seg_x, seg_y), (seg_x + seg_w, seg_y + seg_h), (0, 255, 0), 2)
+        segment_roi = thresh[seg_y:seg_y + seg_h, seg_x:seg_x + seg_w]
+        total_pixels = cv2.countNonZero(segment_roi)
+        area = seg_w * seg_h
+        on_segments.append(1 if total_pixels / float(area) > 0.5 else 0)
+
+    # Mapping des segments au chiffre correspondanttem
+    digit_segments = {
+        (1, 1, 1, 0, 1, 1, 1): 0,
+        (0, 0, 1, 0, 0, 1, 0): 1,
+        (1, 0, 1, 1, 1, 0, 1): 2,
+        (1, 0, 1, 1, 0, 1, 1): 3,
+        (0, 1, 1, 1, 0, 1, 0): 4,
+        (1, 1, 0, 1, 0, 1, 1): 5,
+        (1, 1, 0, 1, 1, 1, 1): 6,
+        (1, 0, 1, 0, 0, 1, 0): 7,
+        (1, 1, 1, 1, 1, 1, 1): 8,
+        (1, 1, 1, 1, 0, 1, 1): 9
+    }
+
+    digit = digit_segments.get(tuple(on_segments), '?')
+    print(f"Chiffre affiché: {digit}")
+
+    return digit
+
+
+def detect_major_color(image):
+    # Convertir l'image en espace de couleur HSV
+    hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+    # Calculer l'histogramme des valeurs HSV
+    # Hue varie de 0 à 180 dans OpenCV
+    hue_hist = cv2.calcHist([hsv_image], [0], None, [180], [0, 180])
+    sat_hist = cv2.calcHist([hsv_image], [1], None, [256], [0, 256])
+    val_hist = cv2.calcHist([hsv_image], [2], None, [256], [0, 256])
+
+    # Trouver la teinte la plus dominante
+    dominant_hue = np.argmax(hue_hist)
+    
+    # Définir les plages de couleurs dans l'espace HSV
+    color_ranges = {
+        "Jaune": ([25, 150, 150], [35, 255, 255]),
+        "Rouge": ([0, 150, 150], [10, 255, 255]),
+        "Rouge2": ([160, 150, 150], [180, 255, 255]),
+        "Vert": ([45, 150, 150], [150, 255, 255])
+    }
+
+    # Trouver la couleur correspondante à la teinte dominante
+    for color_name, (lower_bound, upper_bound) in color_ranges.items():
+        if dominant_hue >= lower_bound[0] and dominant_hue <= upper_bound[0]:
+            # Une fois la couleur dominante détectée, on peut arrêter la boucle
+            dominant_color_name = color_name
+            break
+    else:
+        dominant_color_name = "Non déterminé"
+
+    print(f"Couleur dominante: {dominant_color_name}")
+
+    return dominant_color_name
+
+
+def detect_arrow_direction(image):
+    img_blur = cv2.GaussianBlur(image, (11, 11), 0)
+    img_gray = cv2.cvtColor(img_blur, cv2.COLOR_BGR2GRAY)
+    thresh = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+    vertices = cv2.goodFeaturesToTrack(thresh, 7, 0.01, 10)
+    if vertices is not None:
+        vertices = np.int0(vertices)
+
+        # Définir le rectangle de sélection
+        x_rect, y_rect, width_rect, height_rect = 60, 60,380, 390
+        rect_bottom_right = (x_rect + width_rect, y_rect + height_rect)
+
+        # Dessiner le rectangle sur l'image
+
+        left_count = right_count = 0
+        xmid = x_rect + width_rect / 2
+
+        for vertex in vertices:
+            x, y = vertex.ravel()
+            if x_rect <= x <= rect_bottom_right[0] and y_rect <= y <= rect_bottom_right[1]:
+                # Point est à l'intérieur du rectangle
+                if x < xmid:
+                    left_count += 1
+                else:
+                    right_count += 1
+
+        direction = 'Droite' if right_count > left_count else 'Gauche'
+        print(f"Direction de la flèche : {direction}")
+        
+        # Dessiner une ligne verticale au point médian dans le rectangle
+    else:
+        print("Aucun sommet trouvé pour la direction de la flèche.")
+
+def capture_and_detect_aruco():
+    camera = cv2.VideoCapture(0)
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
+    parameters = cv2.aruco.DetectorParameters()
+
+    while True:
+        ret, frame = camera.read()
+        if ret:
+            frame_for_detection = frame.copy()
+            markerCorners, markerIds, _ = cv2.aruco.detectMarkers(frame, dictionary, parameters=parameters)
+            if markerIds is not None:
+                cv2.aruco.drawDetectedMarkers(frame, markerCorners, markerIds)
+
+                # Créer une image de transformation de perspective si les conditions sont remplies
+                if len(markerIds) == 4 and (np.all(markerIds == 8) or np.all(markerIds == 13) or any(id[0] == 9 for id in markerIds)):
+                    for corner in markerCorners:
+                        cv2.fillConvexPoly(frame_for_detection, np.int32(corner), (255, 255, 255))
+                    warped_image, _ = perspective_transform(frame_for_detection, markerCorners)
+                    if warped_image is not None:
+                        # Traiter l'image transformée en fonction des ID ArUco spécifiques
+                        if np.all(markerIds == 8):
+                            detect_major_color(warped_image)
+                            break
+                        elif any(id[0] == 9 for id in markerIds):
+                            digit = detect_digit(warped_image)
+                            break
+                        elif np.all(markerIds == 13):
+                            detect_arrow_direction(warped_image)
+                            break
+            cv2.imshow('Frame', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    camera.release()
+    cv2.destroyAllWindows()
+
+
+def perspective_transform(image, markerCorners):
+    if len(markerCorners) != 4:
+        print("Erreur : Nombre incorrect de coins détectés.")
+        return None, None
+    
+    corners = np.array([corner[0] for corner in markerCorners], dtype='float32').reshape(-1, 2)
+    top_left, top_right, bottom_right, bottom_left = order_points(corners)
+    width, height = 500, 500
+    dst = np.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]], dtype='float32')
+    matrix = cv2.getPerspectiveTransform(np.array([top_left, top_right, bottom_right, bottom_left]), dst)
+    warped = cv2.warpPerspective(image, matrix, (width, height))
+    return warped, matrix
+
+def order_points(pts):
+    rect = np.zeros((4, 2), dtype='float32')
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+    return rect
+
+
+
+
+def moves():
+    cv2.namedWindow("Preview")  # Création d'une fenêtre pour que cv2.waitKey fonctionnes
+    while True:
+        if cv2.waitKey(1) & 0xFF == ord('s'):
+            print("Arrêt : analyse des arucos")
+            capture_and_detect_aruco()
+            cv2.namedWindow("Preview")  # Création d'une fenêtre pour que cv2.waitKey fonctionnes
+
+        print("Avancée")
+
+if __name__ == "__main__":
+    moves()
+
+
+
+
+
+
+
+
+
+
+
+
 
